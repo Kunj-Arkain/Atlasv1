@@ -1,0 +1,120 @@
+version: "3.9"
+
+# ═══════════════════════════════════════════════════════════════
+# AgenticEngine V2 — Local Development Stack
+# ═══════════════════════════════════════════════════════════════
+# Usage:
+#   docker-compose up -d          # Start all services
+#   docker-compose up -d db redis # Start infra only
+#   docker-compose logs -f api    # Tail API logs
+#   docker-compose down -v        # Stop + remove volumes
+# ═══════════════════════════════════════════════════════════════
+
+services:
+
+  # ── PostgreSQL ───────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: agentic
+      POSTGRES_PASSWORD: agentic
+      POSTGRES_DB: agentic_engine
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentic -d agentic_engine"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Redis ────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── API Server ───────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql://agentic:agentic@db:5432/agentic_engine
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET}
+      SECRETS_MASTER_KEY: ${SECRETS_MASTER_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ALLOW_HEADER_AUTH: "false"
+      LOG_LEVEL: INFO
+      CORS_ORIGINS: ${CORS_ORIGINS:-*}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./engine:/app/engine    # Hot reload in dev
+    command: >
+      sh -c "
+        cd /app &&
+        python -m alembic upgrade head &&
+        python -m engine.cli seed --workspace default 2>/dev/null || true &&
+        python -m engine.api_server
+      "
+
+  # ── Web UI (Next.js) ──────────────────────────────────────
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_API_MODE: fastapi
+      NEXT_PUBLIC_API_BASE_URL: http://api:8000
+      NEXT_PUBLIC_ENABLE_AUTH: "true"
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_started
+    command: npm run start
+
+  # ── Worker ───────────────────────────────────────────────
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql://agentic:agentic@db:5432/agentic_engine
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET}
+      SECRETS_MASTER_KEY: ${SECRETS_MASTER_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      LOG_LEVEL: INFO
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./engine:/app/engine
+    command: >
+      sh -c "
+        cd /app &&
+        python -m engine.worker_main
+      "
+
+volumes:
+  pgdata:

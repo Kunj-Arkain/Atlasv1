@@ -1,0 +1,14 @@
+# ═══════════════════════════════════════════════════════════════
+# Railway Configuration
+# ═══════════════════════════════════════════════════════════════
+# Railway will use the Dockerfile for builds.
+# Environment variables are set in the Railway dashboard.
+
+[build]
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
